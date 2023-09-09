@@ -16,9 +16,13 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <webcface/client.h>
+#include <webcface/data.h>
+#include <thread>
+#include <vector>
 
 #include "rclcpp/rclcpp.hpp"
-#include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/float64.hpp"
 
 using namespace std::chrono_literals;
 
@@ -28,31 +32,54 @@ using namespace std::chrono_literals;
 class MinimalPublisher : public rclcpp::Node
 {
 public:
-  MinimalPublisher()
-  : Node("minimal_publisher"), count_(0)
-  {
-    publisher_ = this->create_publisher<std_msgs::msg::String>("topic", 10);
-    timer_ = this->create_wall_timer(
-      500ms, std::bind(&MinimalPublisher::timer_callback, this));
-  }
+    MinimalPublisher() : Node("minimal_publisher"), wcli_("b", "172.17.0.1")
+    {
+        std::thread([&] {
+            for (int i = 0; i < 100; i++) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                wcli_.sync();
+            }
+        }).detach();
+        // コンストラクタが終了する前にpublisherつくらないといけないっぽいので適当に通信完了を待つ
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        for (auto m : wcli_.members()) {
+            // std::cout << "memberentry" << std::endl;
+            for (auto v : m.values()) {
+                // std::cout << "valueentry" << std::endl;
+                auto topic_name = m.name() + "/" + v.name();
+                for (std::size_t i = 0; i < topic_name.size(); i++) {
+                    if (topic_name[i] == '.') {
+                        topic_name[i] = '/';
+                    }
+                }
+                auto pub = this->create_publisher<std_msgs::msg::Float64>(topic_name, 10);
+                publisher_.push_back(pub);
+                auto publish = [&, pub, topic_name](auto v) {
+                    auto message = std_msgs::msg::Float64();
+                    message.data = v.get();
+                    RCLCPP_INFO(this->get_logger(), "Publishing: %s = '%f'", topic_name.c_str(),
+                        message.data);
+                    pub->publish(message);
+                };
+                publish(v);
+                v.appendListener(publish);
+            }
+        }
+        // std::cout << "constructor end" << std::endl;
+    }
 
 private:
-  void timer_callback()
-  {
-    auto message = std_msgs::msg::String();
-    message.data = "Hello, world! " + std::to_string(count_++);
-    RCLCPP_INFO(this->get_logger(), "Publishing: '%s'", message.data.c_str());
-    publisher_->publish(message);
-  }
-  rclcpp::TimerBase::SharedPtr timer_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr publisher_;
-  size_t count_;
+    std::vector<rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr> publisher_;
+
+    WebCFace::Client wcli_;
 };
 
-int main(int argc, char * argv[])
+int main(int argc, char* argv[])
 {
-  rclcpp::init(argc, argv);
-  rclcpp::spin(std::make_shared<MinimalPublisher>());
-  rclcpp::shutdown();
-  return 0;
+    WebCFace::logger_internal_level = spdlog::level::debug;
+
+    rclcpp::init(argc, argv);
+    rclcpp::spin(std::make_shared<MinimalPublisher>());
+    rclcpp::shutdown();
+    return 0;
 }

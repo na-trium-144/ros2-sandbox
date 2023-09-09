@@ -1,0 +1,3 @@
+[submodule "webcface"]
+	path = webcface
+	url = https://github.com/na-trium-144/webcface.git
